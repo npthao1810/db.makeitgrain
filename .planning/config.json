@@ -1,0 +1,7 @@
+{
+  "project_name": "db.makeitgrain",
+  "workflow_preferences": {
+    "auto_planning": true,
+    "interactive_research": false
+  }
+}
