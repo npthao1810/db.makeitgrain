@@ -5,7 +5,7 @@
 - **Tính toán Lợi nhuận (Margin)**: Khi bán, hệ thống tự động trừ tồn kho từ lô hàng cũ nhất trước (FIFO). Lợi nhuận = Giá bán - Giá nhập của chính lô hàng bị trừ.
 - **Cart & POS**: Giao diện giỏ hàng, chốt đơn dành cho nội bộ cửa hàng (Internal Use Only).
 - **Payment Tracking**: Theo dõi hình thức thanh toán (Tiền mặt / Chuyển khoản) và Đích thanh toán (Tài khoản ngân hàng nào nhận tiền).
-- **Database**: Cấu trúc dữ liệu (Products, Inventory_Batches, Orders, Order_Items, Payment_Logs).
+- **Database**: Cấu trúc dữ liệu (Products, Inventory_Batches, Orders, Order_Items, Inventory_Allocations, Payment_Logs). `Inventory_Allocations` lưu chính xác các lô hàng bị trừ trong mỗi lần bán để kiểm toán FIFO.
 - **Transactions**: Ghi nhận đơn, trừ kho theo lô, log thanh toán trong 1 transaction an toàn.
 - **Reporting**: Báo cáo doanh thu/lợi nhuận theo tháng.
 
