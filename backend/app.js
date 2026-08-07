@@ -8,7 +8,10 @@ const paymentReportRepository = require('./paymentReportRepository');
 const orderRepository = require('./orderRepository');
 const orderEditService = require('./orderEditService');
 const orderDeleteService = require('./orderDeleteService');
+const orderCancelService = require('./orderCancelService');
 const customerRepository = require('./customerRepository');
+const inventoryService = require('./inventoryService');
+const healthService = require('./healthService');
 
 function createApp({
   products = productRepository,
@@ -19,7 +22,10 @@ function createApp({
   orders = orderRepository,
   orderEdits = orderEditService,
   orderDeletes = orderDeleteService,
+  orderCancels = orderCancelService,
   customers = customerRepository,
+  inventory = inventoryService,
+  health = healthService,
   logger = console,
 } = {}) {
   const app = express();
@@ -27,12 +33,36 @@ function createApp({
   app.use(cors());
   app.use(express.json());
 
+  // This endpoint only makes a read-only database ping; it does not expose or
+  // modify business data.
+  app.get('/api/health', async (req, res) => {
+    try {
+      res.json(await health.check());
+    } catch (error) {
+      logger.error('Health check database ping failed.', error);
+      res.status(503).json({ status: 'unavailable', database: 'disconnected' });
+    }
+  });
+
   app.get('/api/products', async (req, res) => {
     try {
       res.json(await products.listProducts());
     } catch (error) {
       logger.error('Unable to load products from the database.', error);
       res.status(500).json({ error: 'Unable to load products.' });
+    }
+  });
+
+  app.post('/api/products', async (req, res) => {
+    try {
+      res.status(201).json(await products.createProduct(req.body));
+    } catch (error) {
+      if (error.status) {
+        res.status(error.status).json({ error: error.message });
+        return;
+      }
+      logger.error('Unable to create product.', error);
+      res.status(500).json({ error: 'Unable to create product.' });
     }
   });
 
@@ -55,6 +85,32 @@ function createApp({
     } catch (error) {
       logger.error('Unable to load customer profiles.', error);
       res.status(500).json({ error: 'Unable to load customer profiles.' });
+    }
+  });
+
+  app.post('/api/inventory/receipts', async (req, res) => {
+    try {
+      res.status(201).json(await inventory.receiveStock(req.body));
+    } catch (error) {
+      if (error.status) {
+        res.status(error.status).json({ error: error.message });
+        return;
+      }
+      logger.error('Unable to receive inventory.', error);
+      res.status(500).json({ error: 'Unable to receive inventory.' });
+    }
+  });
+
+  app.post('/api/inventory/personal-usage', async (req, res) => {
+    try {
+      res.status(201).json(await inventory.recordPersonalUsage(req.body));
+    } catch (error) {
+      if (error.status) {
+        res.status(error.status).json({ error: error.message });
+        return;
+      }
+      logger.error('Unable to record personal usage.', error);
+      res.status(500).json({ error: 'Unable to record personal usage.' });
     }
   });
 
@@ -125,6 +181,19 @@ function createApp({
       }
       logger.error('Unable to delete order.', error);
       res.status(500).json({ error: 'Unable to delete order.' });
+    }
+  });
+
+  app.post('/api/orders/:id/cancel', async (req, res) => {
+    try {
+      res.json(await orderCancels.cancelOrder(req.params.id, req.body));
+    } catch (error) {
+      if (error.status) {
+        res.status(error.status).json({ error: error.message });
+        return;
+      }
+      logger.error('Unable to cancel order.', error);
+      res.status(500).json({ error: 'Unable to cancel order.' });
     }
   });
 

@@ -6,7 +6,13 @@
 - Đã hoàn thành Phase 3: CSDL PostgreSQL với Supabase và dữ liệu lịch sử thực.
 
 ## Active Phase
-- In progress: Phase 6 (Stock reconciliation & reporting)
+- Completed: Phase 6 (Stock reconciliation & reporting)
+- Next: Phase 7 (Operational hardening and release preparation)
+
+## Phase 7 Progress
+- Added the read-only `GET /api/health` endpoint for quickly confirming that
+  the local backend process and Supabase connection are reachable. It is
+  covered by automated success and failure tests.
 
 ## Phase 4 Progress
 - Backend product endpoint now reads from PostgreSQL through `DATABASE_URL`.
@@ -51,6 +57,16 @@
 - Create Order now supports saved-customer name/link lookup, an optional
   discount, and fulfillment details: offline appointment time or online phone
   number plus delivery address.
+- The Stock page now supports receiving a new FIFO inventory batch and
+  recording personal-use withdrawals. Both actions refresh the live stock and
+  monthly tracker after the user submits the form.
+- A Product Catalog page can add a new film with its exposure count and
+  selling price before its first batch is received.
+- Order History now offers Cancel as the recoverable alternative to Delete:
+  cancelling restores allocated stock, removes the payment log, and retains
+  the order record for audit.
+- The Finance page now includes a read-only 12-month revenue versus known
+  gross-profit chart above the detailed monthly table.
 
 ## Phase 3 Progress
 - Supabase product catalog: 20 products, including the seven confirmed additions.
@@ -70,3 +86,4 @@
 - Phase 1 (Setup Backend Node.js với Mock Data)
 - Phase 2 (Khởi tạo Frontend React)
 - Phase 3 (Thiết kế CSDL PostgreSQL)
+- Phase 6 (Stock reconciliation & reporting)
