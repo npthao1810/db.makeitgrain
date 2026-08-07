@@ -3,6 +3,30 @@ const test = require('node:test');
 const { createApp } = require('../app');
 const { CheckoutError } = require('../checkoutService');
 
+test('GET /api/health confirms that the API and database are reachable', async (t) => {
+  const app = createApp({ health: { check: async () => ({ status: 'ok', database: 'connected' }) } });
+  const server = app.listen(0);
+  t.after(() => server.close());
+
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/health`);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { status: 'ok', database: 'connected' });
+});
+
+test('GET /api/health reports a safe unavailable status when the database ping fails', async (t) => {
+  const app = createApp({ health: { check: async () => { throw new Error('connection failed'); } }, logger: { error() {} } });
+  const server = app.listen(0);
+  t.after(() => server.close());
+
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/health`);
+
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { status: 'unavailable', database: 'disconnected' });
+});
+
 test('GET /api/products returns products from the repository', async (t) => {
   const app = createApp({
     products: {
@@ -54,6 +78,26 @@ test('GET /api/products returns a safe error when the database fails', async (t)
   assert.deepEqual(await response.json(), { error: 'Unable to load products.' });
 });
 
+test('POST /api/products creates a catalog product', async (t) => {
+  const app = createApp({
+    products: {
+      createProduct: async (body) => {
+        assert.deepEqual(body, { name: 'Kodak Gold 200', exposures: 24, price: 210000 });
+        return { id: 21, name: 'Kodak Gold 200', exposures: 24, price: 210000 };
+      },
+    },
+  });
+  const server = app.listen(0);
+  t.after(() => server.close());
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/products`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'Kodak Gold 200', exposures: 24, price: 210000 }),
+  });
+  assert.equal(response.status, 201);
+  assert.deepEqual(await response.json(), { id: 21, name: 'Kodak Gold 200', exposures: 24, price: 210000 });
+});
+
 test('GET /api/customers returns saved customer profiles', async (t) => {
   const app = createApp({
     customers: { listCustomerProfiles: async () => [{ customerName: 'Thao', customerContact: '0900000000', customerLink: null, phoneNumber: '0900000000', address: '243 Le Thuoc' }] },
@@ -64,6 +108,47 @@ test('GET /api/customers returns saved customer profiles', async (t) => {
   const response = await fetch(`http://127.0.0.1:${port}/api/customers`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), [{ customerName: 'Thao', customerContact: '0900000000', customerLink: null, phoneNumber: '0900000000', address: '243 Le Thuoc' }]);
+});
+
+test('POST /api/inventory/receipts records a received batch', async (t) => {
+  const app = createApp({
+    inventory: {
+      receiveStock: async (body) => {
+        assert.deepEqual(body, { productId: 4, quantity: 20, unitCost: 210000, receivedAt: '2026-08-06' });
+        return { batchId: 120, productName: 'Ultramax 400', quantity: 20 };
+      },
+    },
+  });
+  const server = app.listen(0);
+  t.after(() => server.close());
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/inventory/receipts`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ productId: 4, quantity: 20, unitCost: 210000, receivedAt: '2026-08-06' }),
+  });
+  assert.equal(response.status, 201);
+  assert.deepEqual(await response.json(), { batchId: 120, productName: 'Ultramax 400', quantity: 20 });
+});
+
+test('POST /api/inventory/personal-usage records a FIFO stock adjustment', async (t) => {
+  const app = createApp({
+    inventory: {
+      recordPersonalUsage: async (body) => {
+        assert.equal(body.productId, 4);
+        assert.equal(body.quantity, 2);
+        return { productName: 'Ultramax 400', quantity: 2 };
+      },
+    },
+  });
+  const server = app.listen(0);
+  t.after(() => server.close());
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/inventory/personal-usage`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ productId: 4, quantity: 2, occurredAt: '2026-08-06', note: 'Personal use' }),
+  });
+  assert.equal(response.status, 201);
+  assert.deepEqual(await response.json(), { productName: 'Ultramax 400', quantity: 2 });
 });
 
 test('GET /api/reports/monthly-stock returns the selected month stock report', async (t) => {
@@ -223,4 +308,25 @@ test('DELETE /api/orders/:id deletes an order through the delete service', async
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { orderId: 845 });
+});
+
+test('POST /api/orders/:id/cancel cancels an order through the cancel service', async (t) => {
+  const app = createApp({
+    orderCancels: {
+      cancelOrder: async (id, body) => {
+        assert.equal(id, '845');
+        assert.equal(body.reason, 'Customer changed their mind');
+        return { orderId: 845, status: 'cancelled' };
+      },
+    },
+  });
+  const server = app.listen(0);
+  t.after(() => server.close());
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/orders/845/cancel`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ reason: 'Customer changed their mind' }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { orderId: 845, status: 'cancelled' });
 });

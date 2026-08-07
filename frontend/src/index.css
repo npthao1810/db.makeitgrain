@@ -6,11 +6,12 @@
   --color-sepia: #704214;
   --color-terracotta: #E2725B;
   --color-olive: #556B2F;
+  --color-plum: #7D3C5A;
 }
 
 @layer base {
   body {
-    background-color: var(--color-paper);
+    background-color: #ffffff;
     color: var(--color-ink);
     font-family: 'Inter', system-ui, sans-serif;
   }

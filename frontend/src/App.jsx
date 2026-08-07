@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 
-const formatVnd = (amount) => `${Number(amount).toLocaleString('vi-VN')}₫`;
+// Keep fractional costs in the database for FIFO accuracy, but VND has no
+// practical sub-unit, so all amounts shown to the user are whole đồng.
+const formatVnd = (amount) => `${Math.round(Number(amount) || 0).toLocaleString('vi-VN')}₫`;
 const formatPaymentDestination = (destination) => (
   destination === 'personal_account' ? 'Personal account'
     : destination === 'shop_account' ? 'Shop account'
@@ -14,6 +16,11 @@ const formatAppointmentTime = (value) => {
   return Number.isNaN(date.valueOf())
     ? value
     : date.toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short' });
+};
+const localDateInputValue = () => {
+  const now = new Date();
+  const local = new Date(now.getTime() - (now.getTimezoneOffset() * 60 * 1000));
+  return local.toISOString().slice(0, 10);
 };
 
 const wrapCanvasText = (context, text, maxWidth) => {
@@ -65,11 +72,19 @@ const productImagePath = (product) => {
 };
 
 const navigationItems = [
-  { id: 'create', label: 'Create Order' },
-  { id: 'stock', label: 'Stock' },
-  { id: 'orders', label: 'Order History' },
-  { id: 'finance', label: 'Finance' },
-  { id: 'payments', label: 'Payments' },
+  { id: 'create', label: 'Create Order', activeClass: 'border-terracotta bg-terracotta/10 text-terracotta' },
+  { id: 'products', label: 'Products', activeClass: 'border-sepia bg-sepia/10 text-sepia' },
+  { id: 'stock', label: 'Stock', activeClass: 'border-olive bg-olive/10 text-olive' },
+  { id: 'orders', label: 'Order History', activeClass: 'border-plum bg-plum/10 text-plum' },
+  { id: 'finance', label: 'Finance', activeClass: 'border-terracotta bg-terracotta/10 text-terracotta' },
+  { id: 'payments', label: 'Payments', activeClass: 'border-olive bg-olive/10 text-olive' },
+];
+
+const quickLinks = [
+  { label: 'Facebook', shortLabel: 'f', href: 'https://www.facebook.com/messages/t/1329752612112933/', className: 'bg-[#1877F2] hover:bg-[#166FE5]' },
+  { label: 'Instagram', shortLabel: 'ig', href: 'https://www.instagram.com/direct/inbox/', className: 'bg-gradient-to-br from-[#833AB4] via-[#FD1D1D] to-[#FCAF45] hover:brightness-95' },
+  { label: 'Threads', shortLabel: '@', href: 'https://www.threads.com/messages', className: 'bg-plum hover:bg-[#683049]' },
+  { label: 'Manual report', shortLabel: '↗', href: 'https://docs.google.com/spreadsheets/d/1QTS-AZygO2BdB5G8BWHyXZrqO8zNRlqa6c5ppGoKVy0/edit?gid=2124391194#gid=2124391194', className: 'bg-olive hover:bg-[#455B25]' },
 ];
 
 function App() {
@@ -106,6 +121,13 @@ function App() {
   const [editingOrder, setEditingOrder] = useState(null);
   const [savingOrder, setSavingOrder] = useState(false);
   const [deletingOrderId, setDeletingOrderId] = useState(null);
+  const [cancellingOrderId, setCancellingOrderId] = useState(null);
+  const [inventoryActionLoading, setInventoryActionLoading] = useState(false);
+  const [receiptForm, setReceiptForm] = useState({ productId: '', quantity: '', unitCost: '', receivedAt: localDateInputValue() });
+  const [personalUsageForm, setPersonalUsageForm] = useState({ productId: '', quantity: '', occurredAt: localDateInputValue(), note: '' });
+  const [productForm, setProductForm] = useState({ name: '', exposures: '', price: '' });
+  const [creatingProduct, setCreatingProduct] = useState(false);
+  const cartPanelRef = useRef(null);
 
   const loadProducts = async () => {
     setLoading(true);
@@ -197,6 +219,13 @@ function App() {
     loadCustomerProfiles();
   }, []);
 
+  // Successful actions should confirm what happened, then get out of the way.
+  useEffect(() => {
+    if (!message || message.type !== 'success') return undefined;
+    const timeout = window.setTimeout(() => setMessage(null), 30_000);
+    return () => window.clearTimeout(timeout);
+  }, [message]);
+
   const cartLines = useMemo(
     () => products
       .filter((product) => cart[product.id])
@@ -207,6 +236,14 @@ function App() {
   const enteredDiscount = Number(orderDiscount || 0);
   const total = Math.max(0, subtotal - (Number.isFinite(enteredDiscount) ? enteredDiscount : 0));
   const totalRolls = cartLines.reduce((sum, line) => sum + line.quantity, 0);
+  const financeChartMonths = useMemo(
+    () => [...financeReport].reverse().slice(-12),
+    [financeReport],
+  );
+  const financeChartMaximum = useMemo(
+    () => Math.max(1, ...financeChartMonths.map((month) => Math.max(month.revenue, month.known_gross_profit))),
+    [financeChartMonths],
+  );
 
   const receiptText = receipt && [
     'Makeitgrain xác nhận đơn hàng thành công:',
@@ -433,6 +470,103 @@ function App() {
     }
   };
 
+  const cancelOrder = async (order) => {
+    const confirmed = window.confirm(`Cancel order #${order.id}? Its stock will be restored and its payment removed. The order record will be kept for audit.`);
+    if (!confirmed) return;
+    setCancellingOrderId(order.id);
+    setMessage(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/orders/${order.id}/cancel`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Unable to cancel order.');
+      if (editingOrder?.id === order.id) setEditingOrder(null);
+      setMessage({ type: 'success', text: `Order #${result.orderId} cancelled. Stock has been restored.` });
+      await Promise.all([loadProducts(), loadOrderHistory(selectedOrderMonth), loadStockReport(selectedReportMonth), loadFinanceReport(), loadPaymentReport()]);
+    } catch (error) {
+      setMessage({ type: 'error', text: error.message });
+    } finally {
+      setCancellingOrderId(null);
+    }
+  };
+
+  const refreshInventoryViews = async (date) => {
+    const reportMonth = `${date.slice(0, 7)}-01`;
+    await Promise.all([loadProducts(), loadStockReport(reportMonth)]);
+  };
+
+  const submitReceipt = async (event) => {
+    event.preventDefault();
+    setInventoryActionLoading(true);
+    setMessage(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/inventory/receipts`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          productId: Number(receiptForm.productId),
+          quantity: Number(receiptForm.quantity),
+          unitCost: Number(receiptForm.unitCost),
+          receivedAt: receiptForm.receivedAt,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Unable to receive inventory.');
+      setMessage({ type: 'success', text: `${result.quantity} rolls of ${result.productName} received into a new batch.` });
+      setReceiptForm({ productId: '', quantity: '', unitCost: '', receivedAt: localDateInputValue() });
+      await refreshInventoryViews(receiptForm.receivedAt);
+    } catch (error) {
+      setMessage({ type: 'error', text: error.message });
+    } finally {
+      setInventoryActionLoading(false);
+    }
+  };
+
+  const submitPersonalUsage = async (event) => {
+    event.preventDefault();
+    setInventoryActionLoading(true);
+    setMessage(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/inventory/personal-usage`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          productId: Number(personalUsageForm.productId),
+          quantity: Number(personalUsageForm.quantity),
+          occurredAt: personalUsageForm.occurredAt,
+          note: personalUsageForm.note,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Unable to record personal usage.');
+      setMessage({ type: 'success', text: `${result.quantity} rolls of ${result.productName} recorded as personal use.` });
+      setPersonalUsageForm({ productId: '', quantity: '', occurredAt: localDateInputValue(), note: '' });
+      await refreshInventoryViews(personalUsageForm.occurredAt);
+    } catch (error) {
+      setMessage({ type: 'error', text: error.message });
+    } finally {
+      setInventoryActionLoading(false);
+    }
+  };
+
+  const submitProduct = async (event) => {
+    event.preventDefault();
+    setCreatingProduct(true);
+    setMessage(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/products`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: productForm.name, exposures: Number(productForm.exposures), price: Number(productForm.price) }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Unable to create product.');
+      setMessage({ type: 'success', text: `${result.name} (${result.exposures} exp) added to the catalog.` });
+      setProductForm({ name: '', exposures: '', price: '' });
+      await loadProducts();
+    } catch (error) {
+      setMessage({ type: 'error', text: error.message });
+    } finally {
+      setCreatingProduct(false);
+    }
+  };
+
   const beginOrderEdit = (order) => {
     setMessage(null);
     setEditingOrder({
@@ -480,20 +614,27 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen max-w-7xl mx-auto px-5 py-8 lg:px-8">
-      <header className="sticky top-0 z-40 mb-8 border-b border-ink/10 bg-paper">
-        <div className="flex flex-col gap-3 pb-5">
+    <div className="mx-auto min-h-screen max-w-7xl px-3 py-4 sm:px-5 sm:py-8 lg:px-8">
+      <header className="sticky top-0 z-40 mb-5 border-b border-ink/15 bg-white/95 px-2 pt-2 shadow-sm backdrop-blur sm:mb-8 sm:px-3 sm:pt-3">
+        <div className="flex items-center justify-between gap-3 pb-3 sm:gap-4 sm:pb-5">
           <div>
-            <img src="/Images/makeitgrain-logo-cropped.png" alt="Make It Grain" className="h-20 w-auto object-contain object-left" />
+            <img src="/Images/makeitgrain-logo-cropped.png" alt="Make It Grain" className="h-16 w-auto object-contain object-left sm:h-20" />
+          </div>
+          <div className="flex flex-wrap justify-end gap-1.5 sm:gap-2 sm:pt-3" aria-label="Quick links">
+            {quickLinks.map((link) => (
+              <a key={link.label} href={link.href} target="_blank" rel="noreferrer" title={link.label} aria-label={link.label} className={`inline-flex size-10 items-center justify-center rounded-full text-xs font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:shadow ${link.className}`}>
+                {link.shortLabel}
+              </a>
+            ))}
           </div>
         </div>
-        <nav aria-label="Main navigation" className="flex overflow-x-auto border-t border-ink/10">
+        <nav aria-label="Main navigation" className="-mx-2 flex overflow-x-auto border-t border-ink/10 bg-white sm:-mx-3">
           {navigationItems.map((item) => (
             <button
               key={item.id}
               type="button"
               onClick={() => setActivePage(item.id)}
-              className={`shrink-0 border-b-2 px-4 py-3 text-sm uppercase tracking-wider transition ${activePage === item.id ? 'border-sepia text-sepia' : 'border-transparent text-ink/55 hover:border-ink/20 hover:text-ink'}`}
+              className={`shrink-0 border-b-2 px-3 py-3 text-xs uppercase tracking-wider transition sm:px-4 sm:text-sm ${activePage === item.id ? item.activeClass : 'border-transparent text-ink/55 hover:border-ink/20 hover:bg-paper hover:text-ink'}`}
             >
               {item.label}
             </button>
@@ -502,14 +643,15 @@ function App() {
       </header>
 
       {message && (
-        <div className={`mb-6 border px-4 py-3 text-sm ${message.type === 'success' ? 'border-olive/40 bg-olive/10 text-olive' : 'border-terracotta/40 bg-terracotta/10 text-terracotta'}`}>
-          {message.text}
+        <div className={`flex items-center justify-between gap-3 border px-3 py-3 text-sm sm:px-4 ${message.type === 'success' ? 'border-olive/40 bg-olive/10 text-olive' : 'border-terracotta/40 bg-terracotta/10 text-terracotta'}`} role="status">
+          <span>{message.text}</span>
+          <button type="button" onClick={() => setMessage(null)} className="shrink-0 text-lg leading-none opacity-70 transition hover:opacity-100" aria-label="Dismiss message">×</button>
         </div>
       )}
 
       {receipt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50 p-5" role="presentation">
-          <section role="dialog" aria-modal="true" aria-labelledby="receipt-title" className="max-h-[90vh] w-full max-w-lg overflow-y-auto border border-ink/20 bg-white p-6 shadow-xl">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/50 p-0 sm:items-center sm:p-5" role="presentation">
+          <section role="dialog" aria-modal="true" aria-labelledby="receipt-title" className="max-h-[92vh] w-full max-w-lg overflow-y-auto border border-ink/20 bg-white p-4 shadow-xl sm:max-h-[90vh] sm:p-6">
             <div className="flex items-start justify-between gap-4 border-b border-ink/10 pb-4">
               <div>
                 <p className="text-xs uppercase tracking-[0.18em] text-sepia">Order confirmed</p>
@@ -539,16 +681,16 @@ function App() {
                 <img src="/Images/payment-qr.jpg" alt="QR code for VP Bank account 25818101999" className="mx-auto mt-4 w-48 border border-ink/10 p-1" />
               </div>
             </div>
-            <div className="flex flex-wrap justify-end gap-3 border-t border-ink/10 pt-4">
-              <button type="button" onClick={() => setReceipt(null)} className="border border-ink/25 px-4 py-2 text-sm">Close</button>
-              <button type="button" onClick={copyReceipt} className="bg-ink px-4 py-2 text-sm text-paper">{receiptCopied ? 'Copied' : 'Copy message'}</button>
-              <button type="button" onClick={downloadReceiptImage} disabled={downloadingReceipt} className="bg-sepia px-4 py-2 text-sm text-paper disabled:opacity-50">{downloadingReceipt ? 'Creating image…' : 'Download image'}</button>
+            <div className="grid gap-2 border-t border-ink/10 pt-4 sm:flex sm:flex-wrap sm:justify-end sm:gap-3">
+              <button type="button" onClick={() => setReceipt(null)} className="border border-ink/25 px-4 py-3 text-sm">Close</button>
+              <button type="button" onClick={copyReceipt} className="bg-ink px-4 py-3 text-sm text-paper">{receiptCopied ? 'Copied' : 'Copy message'}</button>
+              <button type="button" onClick={downloadReceiptImage} disabled={downloadingReceipt} className="bg-sepia px-4 py-3 text-sm text-paper disabled:opacity-50">{downloadingReceipt ? 'Creating image…' : 'Download image'}</button>
             </div>
           </section>
         </div>
       )}
 
-      {activePage === 'create' && <main className="grid gap-8 lg:grid-cols-[1fr_360px]">
+      {activePage === 'create' && <main className="grid gap-5 lg:gap-8 lg:grid-cols-[1fr_360px]">
         <section>
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-lg font-medium uppercase tracking-wide">Available film</h2>
@@ -558,15 +700,15 @@ function App() {
           {loading ? (
             <div className="py-16 text-center text-ink/60 animate-pulse">Đang tải danh sách phim...</div>
           ) : (
-            <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+            <div className="grid grid-cols-2 gap-3 sm:gap-5 md:grid-cols-2 xl:grid-cols-3">
               {products.map((product) => {
                 const inCart = cart[product.id] || 0;
                 const unavailable = product.stock === 0;
                 const imagePath = productImagePath(product);
                 return (
-                  <article key={product.id} className="flex min-h-64 flex-col justify-between overflow-hidden border border-ink/20 bg-white shadow-sm">
+                  <article key={product.id} className="flex min-h-0 flex-col justify-between overflow-hidden border border-ink/20 bg-white shadow-sm sm:min-h-64">
                     {imagePath && (
-                      <div className="flex h-44 items-center justify-center overflow-hidden bg-paper px-5 pt-4">
+                      <div className="flex h-24 items-center justify-center overflow-hidden bg-paper px-2 pt-2 sm:h-44 sm:px-5 sm:pt-4">
                         <img
                           src={imagePath}
                           alt={`${product.name}, ${product.exposures} exposure film`}
@@ -574,21 +716,21 @@ function App() {
                         />
                       </div>
                     )}
-                    <div className="flex flex-1 flex-col justify-between p-5">
+                    <div className="flex flex-1 flex-col justify-between p-3 sm:p-5">
                     <div>
-                      <div className="mb-4 flex items-start justify-between gap-3">
-                        <h3 className="text-lg font-medium text-ink">{product.name}</h3>
-                        <span className="shrink-0 rounded-full border border-ink/10 bg-paper px-2 py-1 text-xs uppercase text-sepia">{product.format}</span>
+                      <div className="mb-2 flex items-start justify-between gap-1.5 sm:mb-4 sm:gap-3">
+                        <h3 className="text-sm font-medium leading-5 text-ink sm:text-lg">{product.name}</h3>
+                        <span className="shrink-0 rounded-full border border-ink/10 bg-paper px-1.5 py-0.5 text-[10px] uppercase text-sepia sm:px-2 sm:py-1 sm:text-xs">{product.format}</span>
                       </div>
-                      <p className="text-2xl font-light text-ink">{formatVnd(product.price)}</p>
+                      <p className="text-lg font-light text-ink sm:text-2xl">{formatVnd(product.price)}</p>
                     </div>
-                    <div className="mt-6 flex items-center justify-between gap-3 border-t border-ink/10 pt-4">
-                      <span className={`text-sm ${product.stock > 5 ? 'text-olive' : 'text-terracotta'}`}>Kho: {product.stock} cuộn</span>
+                    <div className="mt-3 flex items-center justify-between gap-2 border-t border-ink/10 pt-3 sm:mt-6 sm:gap-3 sm:pt-4">
+                      <span className={`text-[11px] sm:text-sm ${product.stock > 5 ? 'text-olive' : 'text-terracotta'}`}>Kho: {product.stock} cuộn</span>
                       <button
                         type="button"
                         disabled={unavailable}
                         onClick={() => changeQuantity(product, 1)}
-                        className="border border-ink px-3 py-2 text-xs uppercase tracking-wider transition hover:bg-ink hover:text-paper disabled:cursor-not-allowed disabled:border-ink/20 disabled:text-ink/30 disabled:hover:bg-transparent"
+                        className="border border-ink px-2 py-2 text-[10px] uppercase tracking-wide transition hover:bg-ink hover:text-paper sm:px-3 sm:text-xs sm:tracking-wider disabled:cursor-not-allowed disabled:border-ink/20 disabled:text-ink/30 disabled:hover:bg-transparent"
                       >
                         {unavailable ? 'Hết hàng' : inCart ? `+ Thêm (${inCart})` : '+ Giỏ hàng'}
                       </button>
@@ -601,7 +743,7 @@ function App() {
           )}
         </section>
 
-        <aside className="h-fit border border-ink/20 bg-white p-5 shadow-sm lg:sticky lg:top-6">
+        <aside ref={cartPanelRef} className="h-fit border border-ink/20 bg-white p-4 shadow-sm sm:p-5 lg:sticky lg:top-6">
           <div className="mb-5 flex items-center justify-between gap-3">
             <h2 className="text-lg font-medium uppercase tracking-wide">Order details</h2>
             <span className="text-sm text-ink/60">Giỏ hàng: {totalRolls} cuộn</span>
@@ -715,6 +857,34 @@ function App() {
         </aside>
       </main>}
 
+      {activePage === 'create' && totalRolls > 0 && (
+        <button
+          type="button"
+          onClick={() => cartPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+          className="fixed inset-x-3 bottom-3 z-30 flex items-center justify-between bg-ink px-4 py-3 text-sm text-paper shadow-lg lg:hidden"
+        >
+          <span>{totalRolls} roll{totalRolls === 1 ? '' : 's'} in cart</span>
+          <span className="font-medium uppercase tracking-wide">View order →</span>
+        </button>
+      )}
+
+      {activePage === 'products' && <section className="grid gap-6 lg:grid-cols-[360px_1fr]">
+        <form onSubmit={submitProduct} className="h-fit border border-ink/20 bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-medium uppercase tracking-wide">Add film</h2>
+          <p className="mt-1 text-sm text-ink/55">Add a product before receiving its first inventory batch.</p>
+          <div className="mt-5 space-y-4">
+            <label className="block text-sm">Film name<input required value={productForm.name} onChange={(event) => setProductForm({ ...productForm, name: event.target.value })} className="mt-1 w-full border border-ink/20 bg-paper px-3 py-2" placeholder="For example: Portra 400" /></label>
+            <label className="block text-sm">Exposures<input required type="number" min="1" step="1" value={productForm.exposures} onChange={(event) => setProductForm({ ...productForm, exposures: event.target.value })} className="mt-1 w-full border border-ink/20 bg-paper px-3 py-2" placeholder="36" /></label>
+            <label className="block text-sm">Selling price (VND)<input required type="number" min="0" step="1" value={productForm.price} onChange={(event) => setProductForm({ ...productForm, price: event.target.value })} className="mt-1 w-full border border-ink/20 bg-paper px-3 py-2" placeholder="250000" /></label>
+          </div>
+          <button type="submit" disabled={creatingProduct} className="mt-5 bg-ink px-4 py-3 text-sm uppercase tracking-wider text-paper disabled:opacity-50">{creatingProduct ? 'Adding…' : 'Add product'}</button>
+        </form>
+        <section className="border border-ink/20 bg-white p-5 shadow-sm">
+          <div className="border-b border-ink/10 pb-4"><h2 className="text-lg font-medium uppercase tracking-wide">Product catalog</h2><p className="mt-1 text-sm text-ink/55">Current selling price and live remaining stock.</p></div>
+          {loading ? <p className="py-10 text-center text-sm text-ink/55 animate-pulse">Loading products…</p> : <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[520px] text-left text-sm"><thead className="border-b border-ink/20 text-xs uppercase tracking-wider text-ink/55"><tr><th className="px-2 py-3">Film</th><th className="px-2 py-3">Exposures</th><th className="px-2 py-3 text-right">Selling price</th><th className="px-2 py-3 text-right">In stock</th></tr></thead><tbody>{products.map((product) => <tr key={product.id} className="border-b border-ink/10"><td className="px-2 py-3 font-medium">{product.name}</td><td className="px-2 py-3">{product.exposures} exp</td><td className="px-2 py-3 text-right">{formatVnd(product.price)}</td><td className="px-2 py-3 text-right">{product.stock}</td></tr>)}</tbody></table></div>}
+        </section>
+      </section>}
+
       {activePage === 'stock' && <section className="border border-ink/20 bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-4 border-b border-ink/10 pb-4 md:flex-row md:items-end md:justify-between">
           <div>
@@ -735,6 +905,35 @@ function App() {
             </select>
           </label>
         </div>
+
+        <details className="my-5 border border-ink/20 bg-paper">
+          <summary className="cursor-pointer px-4 py-3 text-sm font-medium uppercase tracking-wide marker:text-sepia">Stock actions <span className="ml-2 normal-case text-ink/50">Receive a batch or record personal use</span></summary>
+          <div className="grid gap-5 border-t border-ink/10 p-4 lg:grid-cols-2">
+            <form onSubmit={submitReceipt} className="border border-olive/30 bg-olive/5 p-4">
+            <h3 className="font-medium uppercase tracking-wide text-olive">Receive stock</h3>
+            <p className="mt-1 text-sm text-ink/55">Creates a new purchase batch for FIFO costing.</p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <label className="text-sm sm:col-span-2">Film<select required value={receiptForm.productId} onChange={(event) => setReceiptForm({ ...receiptForm, productId: event.target.value })} className="mt-1 w-full border border-ink/20 bg-white px-3 py-2"><option value="">Choose a film</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name} ({product.exposures} exp)</option>)}</select></label>
+              <label className="text-sm">Quantity<input required type="number" min="1" step="1" value={receiptForm.quantity} onChange={(event) => setReceiptForm({ ...receiptForm, quantity: event.target.value })} className="mt-1 w-full border border-ink/20 bg-white px-3 py-2" /></label>
+              <label className="text-sm">Cost / roll (VND)<input required type="number" min="0" step="1" value={receiptForm.unitCost} onChange={(event) => setReceiptForm({ ...receiptForm, unitCost: event.target.value })} className="mt-1 w-full border border-ink/20 bg-white px-3 py-2" /></label>
+              <label className="text-sm sm:col-span-2">Received date<input required type="date" value={receiptForm.receivedAt} onChange={(event) => setReceiptForm({ ...receiptForm, receivedAt: event.target.value })} className="mt-1 w-full border border-ink/20 bg-white px-3 py-2" /></label>
+            </div>
+            <button type="submit" disabled={inventoryActionLoading} className="mt-4 bg-olive px-4 py-2 text-sm text-paper disabled:opacity-50">{inventoryActionLoading ? 'Saving…' : 'Receive stock'}</button>
+            </form>
+
+            <form onSubmit={submitPersonalUsage} className="border border-terracotta/30 bg-terracotta/5 p-4">
+            <h3 className="font-medium uppercase tracking-wide text-terracotta">Personal use</h3>
+            <p className="mt-1 text-sm text-ink/55">Deducts rolls from the oldest available batches and keeps the adjustment history.</p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <label className="text-sm sm:col-span-2">Film<select required value={personalUsageForm.productId} onChange={(event) => setPersonalUsageForm({ ...personalUsageForm, productId: event.target.value })} className="mt-1 w-full border border-ink/20 bg-white px-3 py-2"><option value="">Choose a film</option>{products.filter((product) => product.stock > 0).map((product) => <option key={product.id} value={product.id}>{product.name} ({product.exposures} exp) — {product.stock} in stock</option>)}</select></label>
+              <label className="text-sm">Quantity<input required type="number" min="1" step="1" value={personalUsageForm.quantity} onChange={(event) => setPersonalUsageForm({ ...personalUsageForm, quantity: event.target.value })} className="mt-1 w-full border border-ink/20 bg-white px-3 py-2" /></label>
+              <label className="text-sm">Usage date<input required type="date" value={personalUsageForm.occurredAt} onChange={(event) => setPersonalUsageForm({ ...personalUsageForm, occurredAt: event.target.value })} className="mt-1 w-full border border-ink/20 bg-white px-3 py-2" /></label>
+              <label className="text-sm sm:col-span-2">Note <span className="text-ink/40">(optional)</span><input value={personalUsageForm.note} onChange={(event) => setPersonalUsageForm({ ...personalUsageForm, note: event.target.value })} className="mt-1 w-full border border-ink/20 bg-white px-3 py-2" placeholder="For example: personal use" /></label>
+            </div>
+            <button type="submit" disabled={inventoryActionLoading} className="mt-4 bg-terracotta px-4 py-2 text-sm text-paper disabled:opacity-50">{inventoryActionLoading ? 'Saving…' : 'Record personal use'}</button>
+            </form>
+          </div>
+        </details>
 
         {reportLoading ? (
           <p className="py-10 text-center text-sm text-ink/55 animate-pulse">Đang tải báo cáo tồn kho...</p>
@@ -784,8 +983,40 @@ function App() {
         {financeLoading ? (
           <p className="py-10 text-center text-sm text-ink/55 animate-pulse">Đang tải báo cáo tài chính...</p>
         ) : (
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[760px] text-left text-sm">
+          <>
+            <div className="mt-5 overflow-x-auto border border-ink/10 bg-paper p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-medium uppercase tracking-wide">Revenue and margin</h3>
+                  <p className="mt-1 text-xs text-ink/55">Last 12 months · hover a bar for the amount</p>
+                </div>
+                <div className="flex gap-3 text-xs text-ink/60">
+                  <span><span className="mr-1 inline-block size-2 bg-terracotta/75" />Revenue</span>
+                  <span><span className="mr-1 inline-block size-2 bg-olive" />Known margin</span>
+                </div>
+              </div>
+              {financeChartMonths.length === 0 ? (
+                <p className="py-8 text-center text-sm text-ink/55">No completed orders yet.</p>
+              ) : (
+                <div className="mt-5 flex h-52 min-w-[680px] items-end gap-2 border-b border-ink/20 px-2">
+                  {financeChartMonths.map((month) => {
+                    const revenueHeight = Math.max(3, (month.revenue / financeChartMaximum) * 100);
+                    const profitHeight = month.known_gross_profit > 0 ? Math.max(3, (month.known_gross_profit / financeChartMaximum) * 100) : 0;
+                    return (
+                      <div key={month.month_start} className="flex h-full min-w-12 flex-1 flex-col justify-end text-center">
+                        <div className="mx-auto flex h-44 w-full max-w-12 items-end justify-center gap-1 bg-ink/5">
+                          <div className="w-3 bg-terracotta/75" style={{ height: `${revenueHeight}%` }} title={`Revenue: ${formatVnd(month.revenue)}`} />
+                          <div className="w-3 bg-olive" style={{ height: `${profitHeight}%` }} title={`Known margin: ${formatVnd(month.known_gross_profit)}`} />
+                        </div>
+                        <span className="mt-2 text-[10px] text-ink/55">{month.month_start.slice(2, 7)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full min-w-[760px] text-left text-sm">
               <thead className="border-b border-ink/20 text-xs uppercase tracking-wider text-ink/55">
                 <tr>
                   <th className="px-2 py-3 font-medium">Month</th>
@@ -808,8 +1039,9 @@ function App() {
                   </tr>
                 ))}
               </tbody>
-            </table>
-          </div>
+              </table>
+            </div>
+          </>
         )}
       </section>}
 
@@ -918,7 +1150,7 @@ function App() {
                     <td className="whitespace-nowrap px-2 py-3 text-right">{order.total_cost === null ? 'Pending' : formatVnd(order.total_cost)}</td>
                     <td className="whitespace-nowrap px-2 py-3 text-right font-medium text-olive">{order.total_cost === null ? '—' : formatVnd(order.total_amount - order.total_cost)}</td>
                     <td className="whitespace-nowrap px-2 py-3">{formatPaymentDestination(order.payment_destination)}</td>
-                    <td className="whitespace-nowrap px-2 py-3 text-right"><div className="flex justify-end gap-3"><button type="button" onClick={() => beginOrderEdit(order)} className="text-sepia underline underline-offset-4">Edit</button><button type="button" onClick={() => deleteOrder(order)} disabled={deletingOrderId === order.id} className="text-terracotta underline underline-offset-4 disabled:text-ink/30">{deletingOrderId === order.id ? 'Deleting…' : 'Delete'}</button></div></td>
+                    <td className="whitespace-nowrap px-2 py-3 text-right"><div className="flex justify-end gap-3"><button type="button" onClick={() => beginOrderEdit(order)} className="text-sepia underline underline-offset-4">Edit</button><button type="button" onClick={() => cancelOrder(order)} disabled={cancellingOrderId === order.id} className="text-terracotta underline underline-offset-4 disabled:text-ink/30">{cancellingOrderId === order.id ? 'Cancelling…' : 'Cancel'}</button><button type="button" onClick={() => deleteOrder(order)} disabled={deletingOrderId === order.id} className="text-ink/50 underline underline-offset-4 disabled:text-ink/30">{deletingOrderId === order.id ? 'Deleting…' : 'Delete'}</button></div></td>
                   </tr>
                 ))}
               </tbody>
