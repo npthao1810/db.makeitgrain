@@ -10,6 +10,13 @@
 }
 
 @layer base {
+  html,
+  body,
+  #root {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
   body {
     background-color: #ffffff;
     color: var(--color-ink);

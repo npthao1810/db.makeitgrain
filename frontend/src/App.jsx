@@ -98,7 +98,10 @@ const quickLinks = [
 
 function App() {
   const [products, setProducts] = useState([]);
-  const [activePage, setActivePage] = useState('create');
+  const [activePage, setActivePage] = useState(() => {
+    const savedPage = window.sessionStorage.getItem('makeitgrain.active-page');
+    return navigationItems.some((item) => item.id === savedPage) ? savedPage : 'create';
+  });
   const [cart, setCart] = useState({});
   const [loading, setLoading] = useState(true);
   const [checkingOut, setCheckingOut] = useState(false);
@@ -139,6 +142,7 @@ function App() {
   const [creatingProduct, setCreatingProduct] = useState(false);
   const cartPanelRef = useRef(null);
   const customerSuggestionRef = useRef(null);
+  const pageScrollPositionsRef = useRef({});
   const [authUser, setAuthUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(Boolean(supabase));
   const [authEmail, setAuthEmail] = useState('');
@@ -286,6 +290,57 @@ function App() {
     return () => document.removeEventListener('pointerdown', closeSuggestionsOutsideField);
   }, []);
 
+  useEffect(() => {
+    try {
+      const savedPositions = JSON.parse(window.sessionStorage.getItem('makeitgrain.page-scroll-positions') || '{}');
+      if (savedPositions && typeof savedPositions === 'object') pageScrollPositionsRef.current = savedPositions;
+    } catch {
+      pageScrollPositionsRef.current = {};
+    }
+  }, []);
+
+  const savePagePosition = (page = activePage) => {
+    pageScrollPositionsRef.current[page] = window.scrollY;
+    window.sessionStorage.setItem('makeitgrain.page-scroll-positions', JSON.stringify(pageScrollPositionsRef.current));
+  };
+
+  const switchPage = (page) => {
+    savePagePosition();
+    window.sessionStorage.setItem('makeitgrain.active-page', page);
+    setActivePage(page);
+  };
+
+  useEffect(() => {
+    const restorePagePosition = () => {
+      const position = pageScrollPositionsRef.current[activePage];
+      if (Number.isFinite(position)) window.scrollTo(0, position);
+    };
+    const frame = window.requestAnimationFrame(restorePagePosition);
+    const delayedRestore = window.setTimeout(restorePagePosition, 250);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(delayedRestore);
+    };
+  }, [activePage]);
+
+  useEffect(() => {
+    const saveBeforeLeaving = () => savePagePosition();
+    const saveOrRestoreOnVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        savePagePosition();
+        return;
+      }
+      const position = pageScrollPositionsRef.current[activePage];
+      if (Number.isFinite(position)) window.scrollTo(0, position);
+    };
+    window.addEventListener('pagehide', saveBeforeLeaving);
+    document.addEventListener('visibilitychange', saveOrRestoreOnVisibilityChange);
+    return () => {
+      window.removeEventListener('pagehide', saveBeforeLeaving);
+      document.removeEventListener('visibilitychange', saveOrRestoreOnVisibilityChange);
+    };
+  }, [activePage]);
+
   const cartLines = useMemo(
     () => products
       .filter((product) => cart[product.id])
@@ -411,7 +466,7 @@ function App() {
         loadFinanceReport(),
         loadPaymentReport(),
       ]);
-      setActivePage('orders');
+      switchPage('orders');
     } catch (error) {
       setMessage({ type: 'error', text: error.message });
     } finally {
@@ -777,7 +832,7 @@ function App() {
             <button
               key={item.id}
               type="button"
-              onClick={() => setActivePage(item.id)}
+              onClick={() => switchPage(item.id)}
               className={`shrink-0 border-b-2 px-3 py-3 text-xs uppercase tracking-wider transition sm:px-4 sm:text-sm ${activePage === item.id ? item.activeClass : 'border-transparent text-ink/55 hover:border-ink/20 hover:bg-paper hover:text-ink'}`}
             >
               {item.label}
@@ -794,8 +849,8 @@ function App() {
       )}
 
       {receipt && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/50 p-0 sm:items-center sm:p-5" role="presentation">
-          <section role="dialog" aria-modal="true" aria-labelledby="receipt-title" className="max-h-[92vh] w-full max-w-lg overflow-y-auto border border-ink/20 bg-white p-4 shadow-xl sm:max-h-[90vh] sm:p-6">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/50 p-2 sm:items-center sm:p-5" role="presentation">
+          <section role="dialog" aria-modal="true" aria-labelledby="receipt-title" className="max-h-[calc(100dvh-1rem)] w-full max-w-lg overflow-x-hidden overflow-y-auto border border-ink/20 bg-white p-4 shadow-xl sm:max-h-[90vh] sm:p-6">
             <div className="flex items-start justify-between gap-4 border-b border-ink/10 pb-4">
               <div>
                 <p className="text-xs uppercase tracking-[0.18em] text-sepia">Order confirmed</p>
@@ -834,8 +889,8 @@ function App() {
         </div>
       )}
 
-      {activePage === 'create' && <main className="grid gap-5 lg:gap-8 lg:grid-cols-[1fr_360px]">
-        <section>
+      {activePage === 'create' && <main className="grid min-w-0 gap-5 lg:gap-8 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <section className="min-w-0">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-lg font-medium uppercase tracking-wide">Available film</h2>
             <button type="button" onClick={loadProducts} className="text-sm text-sepia underline underline-offset-4">Refresh stock</button>
@@ -887,7 +942,7 @@ function App() {
           )}
         </section>
 
-        <aside ref={cartPanelRef} className="h-fit border border-ink/20 bg-white p-4 shadow-sm sm:p-5 lg:sticky lg:top-6">
+        <aside ref={cartPanelRef} className="h-fit min-w-0 border border-ink/20 bg-white p-4 shadow-sm sm:p-5 lg:sticky lg:top-6">
           <div className="mb-5 flex items-center justify-between gap-3">
             <h2 className="text-lg font-medium uppercase tracking-wide">Order details</h2>
             <span className="text-sm text-ink/60">Giỏ hàng: {totalRolls} cuộn</span>
