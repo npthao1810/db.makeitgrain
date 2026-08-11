@@ -140,8 +140,11 @@ function App() {
   const [authUser, setAuthUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(Boolean(supabase));
   const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authMode, setAuthMode] = useState('magic-link');
   const [authNotice, setAuthNotice] = useState(null);
   const [sendingMagicLink, setSendingMagicLink] = useState(false);
+  const [signingInWithPassword, setSigningInWithPassword] = useState(false);
 
   const apiFetch = async (path, options = {}) => {
     const headers = new Headers(options.headers);
@@ -677,6 +680,21 @@ function App() {
       : { type: 'success', text: 'Check your email and open the secure sign-in link.' });
   };
 
+  const signInWithPassword = async (event) => {
+    event.preventDefault();
+    if (!supabase) return;
+    setSigningInWithPassword(true);
+    setAuthNotice(null);
+    const { error } = await supabase.auth.signInWithPassword({
+      email: authEmail.trim(),
+      password: authPassword,
+    });
+    setSigningInWithPassword(false);
+    setAuthNotice(error
+      ? { type: 'error', text: error.message }
+      : { type: 'success', text: 'Signed in successfully.' });
+  };
+
   const signOut = async () => {
     if (!supabase) return;
     await supabase.auth.signOut();
@@ -697,13 +715,27 @@ function App() {
         <section className="w-full max-w-sm border border-ink/20 bg-white p-6 shadow-sm">
           <img src="/Images/makeitgrain-logo-cropped.png" alt="Make It Grain" className="mx-auto h-24 w-auto object-contain" />
           <h1 className="mt-5 text-center text-lg font-medium uppercase tracking-wide">Private workspace</h1>
-          <p className="mt-2 text-center text-sm leading-6 text-ink/60">Enter your owner email. We will send a secure sign-in link—no password is needed.</p>
-          <form onSubmit={requestMagicLink} className="mt-6">
+          <p className="mt-2 text-center text-sm leading-6 text-ink/60">Sign in with a secure email link or the password created for your workspace account.</p>
+          <div className="mt-6 grid grid-cols-2 border border-ink/20 p-1 text-xs font-medium uppercase tracking-wide">
+            <button type="button" onClick={() => { setAuthMode('magic-link'); setAuthNotice(null); }} className={`px-3 py-2 transition ${authMode === 'magic-link' ? 'bg-ink text-paper' : 'text-ink/60 hover:bg-paper'}`}>Email link</button>
+            <button type="button" onClick={() => { setAuthMode('password'); setAuthNotice(null); }} className={`px-3 py-2 transition ${authMode === 'password' ? 'bg-ink text-paper' : 'text-ink/60 hover:bg-paper'}`}>Password</button>
+          </div>
+          <form onSubmit={authMode === 'magic-link' ? requestMagicLink : signInWithPassword} className="mt-4">
             <label className="block text-sm">
               Email address
               <input type="email" required value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} className="mt-1 w-full border border-ink/20 bg-paper px-3 py-3 outline-none focus:border-sepia" placeholder="you@example.com" autoComplete="email" />
             </label>
-            <button type="submit" disabled={sendingMagicLink} className="mt-4 w-full bg-ink px-4 py-3 text-sm uppercase tracking-wider text-paper disabled:opacity-50">{sendingMagicLink ? 'Sending…' : 'Email me a sign-in link'}</button>
+            {authMode === 'password' && (
+              <label className="mt-4 block text-sm">
+                Password
+                <input type="password" required value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} className="mt-1 w-full border border-ink/20 bg-paper px-3 py-3 outline-none focus:border-sepia" autoComplete="current-password" />
+              </label>
+            )}
+            <button type="submit" disabled={sendingMagicLink || signingInWithPassword} className="mt-4 w-full bg-ink px-4 py-3 text-sm uppercase tracking-wider text-paper disabled:opacity-50">
+              {authMode === 'magic-link'
+                ? (sendingMagicLink ? 'Sending…' : 'Email me a sign-in link')
+                : (signingInWithPassword ? 'Signing in…' : 'Sign in with password')}
+            </button>
           </form>
           {authNotice && <p className={`mt-4 border px-3 py-2 text-sm ${authNotice.type === 'error' ? 'border-terracotta/40 bg-terracotta/10 text-terracotta' : 'border-olive/40 bg-olive/10 text-olive'}`}>{authNotice.text}</p>}
         </section>
