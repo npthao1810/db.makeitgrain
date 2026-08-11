@@ -138,6 +138,7 @@ function App() {
   const [productForm, setProductForm] = useState({ name: '', exposures: '', price: '' });
   const [creatingProduct, setCreatingProduct] = useState(false);
   const cartPanelRef = useRef(null);
+  const customerSuggestionRef = useRef(null);
   const [authUser, setAuthUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(Boolean(supabase));
   const [authEmail, setAuthEmail] = useState('');
@@ -275,6 +276,15 @@ function App() {
     const timeout = window.setTimeout(() => setMessage(null), 30_000);
     return () => window.clearTimeout(timeout);
   }, [message]);
+
+  useEffect(() => {
+    const closeSuggestionsOutsideField = (event) => {
+      if (customerSuggestionRef.current?.contains(event.target)) return;
+      setCustomerSuggestionsOpen(false);
+    };
+    document.addEventListener('pointerdown', closeSuggestionsOutsideField);
+    return () => document.removeEventListener('pointerdown', closeSuggestionsOutsideField);
+  }, []);
 
   const cartLines = useMemo(
     () => products
@@ -911,7 +921,7 @@ function App() {
                 Order date
                 <input type="date" required value={orderDate} onChange={(event) => setOrderDate(event.target.value)} className="mt-1 w-full border border-ink/20 bg-paper px-3 py-2 outline-none focus:border-sepia" />
               </label>
-              <div className="relative text-sm">
+              <div ref={customerSuggestionRef} className="relative text-sm">
                 <label className="block">
                   Customer name <span className="text-ink/40">(optional)</span>
                   <input
