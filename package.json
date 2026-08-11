@@ -1,0 +1,10 @@
+{
+  "name": "makeitgrain-pos-deployment",
+  "private": true,
+  "scripts": {
+    "build": "npm ci --prefix backend && npm ci --prefix frontend && npm run build --prefix frontend"
+  },
+  "dependencies": {
+    "serverless-http": "^4.0.0"
+  }
+}

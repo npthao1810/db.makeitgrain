@@ -12,6 +12,7 @@ const orderCancelService = require('./orderCancelService');
 const customerRepository = require('./customerRepository');
 const inventoryService = require('./inventoryService');
 const healthService = require('./healthService');
+const authService = require('./authService');
 
 function createApp({
   products = productRepository,
@@ -26,6 +27,7 @@ function createApp({
   customers = customerRepository,
   inventory = inventoryService,
   health = healthService,
+  auth = authService,
   logger = console,
 } = {}) {
   const app = express();
@@ -43,6 +45,8 @@ function createApp({
       res.status(503).json({ status: 'unavailable', database: 'disconnected' });
     }
   });
+
+  app.use('/api', auth.requireUser);
 
   app.get('/api/products', async (req, res) => {
     try {

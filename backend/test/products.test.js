@@ -27,6 +27,24 @@ test('GET /api/health reports a safe unavailable status when the database ping f
   assert.deepEqual(await response.json(), { status: 'unavailable', database: 'disconnected' });
 });
 
+test('protected API routes use the configured authentication middleware', async (t) => {
+  const app = createApp({
+    auth: {
+      requireUser(req, res) {
+        res.status(401).json({ error: 'Sign in is required.' });
+      },
+    },
+  });
+  const server = app.listen(0);
+  t.after(() => server.close());
+
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/products`);
+
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { error: 'Sign in is required.' });
+});
+
 test('GET /api/products returns products from the repository', async (t) => {
   const app = createApp({
     products: {

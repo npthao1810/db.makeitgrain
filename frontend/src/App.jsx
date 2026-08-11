@@ -1,6 +1,15 @@
+import { createClient } from '@supabase/supabase-js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
+// Production uses same-origin /api routes. Local development keeps the
+// dedicated Express server unless an explicit API URL is supplied.
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
+  ?? (import.meta.env.DEV ? 'http://localhost:5001' : '');
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabase = supabaseUrl && supabaseAnonKey
+  ? createClient(supabaseUrl, supabaseAnonKey)
+  : null;
 
 // Keep fractional costs in the database for FIFO accuracy, but VND has no
 // practical sub-unit, so all amounts shown to the user are whole đồng.
@@ -128,11 +137,25 @@ function App() {
   const [productForm, setProductForm] = useState({ name: '', exposures: '', price: '' });
   const [creatingProduct, setCreatingProduct] = useState(false);
   const cartPanelRef = useRef(null);
+  const [authUser, setAuthUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(Boolean(supabase));
+  const [authEmail, setAuthEmail] = useState('');
+  const [authNotice, setAuthNotice] = useState(null);
+  const [sendingMagicLink, setSendingMagicLink] = useState(false);
+
+  const apiFetch = async (path, options = {}) => {
+    const headers = new Headers(options.headers);
+    if (supabase) {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) headers.set('authorization', `Bearer ${session.access_token}`);
+    }
+    return fetch(`${apiBaseUrl}${path}`, { ...options, headers });
+  };
 
   const loadProducts = async () => {
     setLoading(true);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/products`);
+      const response = await apiFetch('/api/products');
       if (!response.ok) throw new Error('Unable to load products.');
       setProducts(await response.json());
     } catch {
@@ -146,7 +169,7 @@ function App() {
     setReportLoading(true);
     try {
       const query = month ? `?month=${encodeURIComponent(month)}` : '';
-      const response = await fetch(`${apiBaseUrl}/api/reports/monthly-stock${query}`);
+      const response = await apiFetch(`/api/reports/monthly-stock${query}`);
       if (!response.ok) throw new Error('Unable to load monthly stock.');
       const report = await response.json();
       setStockReport(report);
@@ -161,7 +184,7 @@ function App() {
   const loadFinanceReport = async () => {
     setFinanceLoading(true);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/reports/monthly-finance`);
+      const response = await apiFetch('/api/reports/monthly-finance');
       if (!response.ok) throw new Error('Unable to load monthly finance.');
       setFinanceReport(await response.json());
     } catch {
@@ -174,7 +197,7 @@ function App() {
   const loadPaymentReport = async () => {
     setPaymentLoading(true);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/reports/monthly-payments`);
+      const response = await apiFetch('/api/reports/monthly-payments');
       if (!response.ok) throw new Error('Unable to load monthly payments.');
       setPaymentReport(await response.json());
     } catch {
@@ -188,7 +211,7 @@ function App() {
     setOrdersLoading(true);
     try {
       const query = month ? `?month=${encodeURIComponent(month)}` : '';
-      const response = await fetch(`${apiBaseUrl}/api/orders${query}`);
+      const response = await apiFetch(`/api/orders${query}`);
       if (!response.ok) throw new Error('Unable to load order history.');
       const history = await response.json();
       setOrderHistory(history);
@@ -202,7 +225,7 @@ function App() {
 
   const loadCustomerProfiles = async () => {
     try {
-      const response = await fetch(`${apiBaseUrl}/api/customers`);
+      const response = await apiFetch('/api/customers');
       if (!response.ok) throw new Error('Unable to load customer profiles.');
       setCustomerProfiles(await response.json());
     } catch {
@@ -211,13 +234,36 @@ function App() {
   };
 
   useEffect(() => {
+    if (!supabase) {
+      setAuthLoading(false);
+      return undefined;
+    }
+    let active = true;
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (active) {
+        setAuthUser(session?.user ?? null);
+        setAuthLoading(false);
+      }
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthUser(session?.user ?? null);
+      setAuthLoading(false);
+    });
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (supabase && !authUser) return;
     loadProducts();
     loadStockReport();
     loadFinanceReport();
     loadPaymentReport();
     loadOrderHistory();
     loadCustomerProfiles();
-  }, []);
+  }, [authUser]);
 
   // Successful actions should confirm what happened, then get out of the way.
   useEffect(() => {
@@ -298,7 +344,7 @@ function App() {
     setCheckingOut(true);
     setMessage(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/checkout`, {
+      const response = await apiFetch('/api/checkout', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -457,7 +503,7 @@ function App() {
     setDeletingOrderId(order.id);
     setMessage(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/orders/${order.id}`, { method: 'DELETE' });
+      const response = await apiFetch(`/api/orders/${order.id}`, { method: 'DELETE' });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Unable to delete order.');
       if (editingOrder?.id === order.id) setEditingOrder(null);
@@ -476,7 +522,7 @@ function App() {
     setCancellingOrderId(order.id);
     setMessage(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/orders/${order.id}/cancel`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
+      const response = await apiFetch(`/api/orders/${order.id}/cancel`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Unable to cancel order.');
       if (editingOrder?.id === order.id) setEditingOrder(null);
@@ -499,7 +545,7 @@ function App() {
     setInventoryActionLoading(true);
     setMessage(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/inventory/receipts`, {
+      const response = await apiFetch('/api/inventory/receipts', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           productId: Number(receiptForm.productId),
@@ -525,7 +571,7 @@ function App() {
     setInventoryActionLoading(true);
     setMessage(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/inventory/personal-usage`, {
+      const response = await apiFetch('/api/inventory/personal-usage', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           productId: Number(personalUsageForm.productId),
@@ -551,7 +597,7 @@ function App() {
     setCreatingProduct(true);
     setMessage(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/products`, {
+      const response = await apiFetch('/api/products', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: productForm.name, exposures: Number(productForm.exposures), price: Number(productForm.price) }),
       });
@@ -590,7 +636,7 @@ function App() {
     setSavingOrder(true);
     setMessage(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/orders/${editingOrder.id}`, {
+      const response = await apiFetch(`/api/orders/${editingOrder.id}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -613,6 +659,58 @@ function App() {
     }
   };
 
+  const requestMagicLink = async (event) => {
+    event.preventDefault();
+    if (!supabase) return;
+    setSendingMagicLink(true);
+    setAuthNotice(null);
+    const { error } = await supabase.auth.signInWithOtp({
+      email: authEmail.trim(),
+      options: {
+        emailRedirectTo: window.location.origin,
+        shouldCreateUser: false,
+      },
+    });
+    setSendingMagicLink(false);
+    setAuthNotice(error
+      ? { type: 'error', text: error.message }
+      : { type: 'success', text: 'Check your email and open the secure sign-in link.' });
+  };
+
+  const signOut = async () => {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setAuthNotice(null);
+  };
+
+  if (authLoading) {
+    return <div className="grid min-h-screen place-items-center bg-white p-6 text-sm text-ink/60">Checking your secure session…</div>;
+  }
+
+  if (!supabase && !import.meta.env.DEV) {
+    return <div className="grid min-h-screen place-items-center bg-white p-6 text-center text-sm text-terracotta">This deployment is missing its Supabase sign-in configuration.</div>;
+  }
+
+  if (supabase && !authUser) {
+    return (
+      <main className="grid min-h-screen place-items-center bg-white p-5">
+        <section className="w-full max-w-sm border border-ink/20 bg-white p-6 shadow-sm">
+          <img src="/Images/makeitgrain-logo-cropped.png" alt="Make It Grain" className="mx-auto h-24 w-auto object-contain" />
+          <h1 className="mt-5 text-center text-lg font-medium uppercase tracking-wide">Private workspace</h1>
+          <p className="mt-2 text-center text-sm leading-6 text-ink/60">Enter your owner email. We will send a secure sign-in link—no password is needed.</p>
+          <form onSubmit={requestMagicLink} className="mt-6">
+            <label className="block text-sm">
+              Email address
+              <input type="email" required value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} className="mt-1 w-full border border-ink/20 bg-paper px-3 py-3 outline-none focus:border-sepia" placeholder="you@example.com" autoComplete="email" />
+            </label>
+            <button type="submit" disabled={sendingMagicLink} className="mt-4 w-full bg-ink px-4 py-3 text-sm uppercase tracking-wider text-paper disabled:opacity-50">{sendingMagicLink ? 'Sending…' : 'Email me a sign-in link'}</button>
+          </form>
+          {authNotice && <p className={`mt-4 border px-3 py-2 text-sm ${authNotice.type === 'error' ? 'border-terracotta/40 bg-terracotta/10 text-terracotta' : 'border-olive/40 bg-olive/10 text-olive'}`}>{authNotice.text}</p>}
+        </section>
+      </main>
+    );
+  }
+
   return (
     <div className="mx-auto min-h-screen max-w-7xl px-3 py-4 sm:px-5 sm:py-8 lg:px-8">
       <header className="sticky top-0 z-40 mb-5 border-b border-ink/15 bg-white/95 px-2 pt-2 shadow-sm backdrop-blur sm:mb-8 sm:px-3 sm:pt-3">
@@ -626,6 +724,7 @@ function App() {
                 {link.shortLabel}
               </a>
             ))}
+            {supabase && <button type="button" onClick={signOut} className="inline-flex h-10 items-center justify-center rounded-full border border-ink/20 px-3 text-xs font-medium text-ink transition hover:bg-paper">Sign out</button>}
           </div>
         </div>
         <nav aria-label="Main navigation" className="-mx-2 flex overflow-x-auto border-t border-ink/10 bg-white sm:-mx-3">

@@ -13,6 +13,12 @@
 - Added the read-only `GET /api/health` endpoint for quickly confirming that
   the local backend process and Supabase connection are reachable. It is
   covered by automated success and failure tests.
+- Prepared a Netlify deployment build: the React frontend is published as
+  static assets and `/api/*` is routed to the existing Express app through a
+  serverless-function adapter.
+- Added Supabase magic-link protection for a public deployment. Netlify API
+  routes require a verified session; remaining deployment setup is adding the
+  Supabase/Auth environment values and redirect URL in the provider dashboards.
 
 ## Phase 4 Progress
 - Backend product endpoint now reads from PostgreSQL through `DATABASE_URL`.
