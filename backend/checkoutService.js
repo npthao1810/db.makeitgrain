@@ -59,9 +59,22 @@ function fulfillmentDetails(fulfillmentMethod, appointmentTime, phoneNumber, add
   throw new CheckoutError('Choose Offline or Online for this order.');
 }
 
+function orderDateValue(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new CheckoutError('Order date must use YYYY-MM-DD format.');
+  }
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(parsed.valueOf()) || parsed.toISOString().slice(0, 10) !== value) {
+    throw new CheckoutError('Order date must be a real calendar date.');
+  }
+  return value;
+}
+
 async function checkout({
   customerName = null,
   customerLink = null,
+  orderDate = null,
   discount = 0,
   fulfillmentMethod,
   appointmentTime = null,
@@ -74,6 +87,7 @@ async function checkout({
   const cartItems = normalizeItems(items);
   const payment = paymentDetails(paymentMethod, paymentDestination);
   const fulfillment = fulfillmentDetails(fulfillmentMethod, appointmentTime, phoneNumber, address);
+  const selectedOrderDate = orderDateValue(orderDate);
   const orderDiscount = Number(discount || 0);
   if (!Number.isInteger(orderDiscount) || orderDiscount < 0) {
     throw new CheckoutError('Discount must be a whole, non-negative VND amount.');
@@ -122,7 +136,7 @@ async function checkout({
         customer_name, customer_link, discount, fulfillment_method, appointment_note,
         delivery_phone, delivery_address, status, total_amount, total_cost,
         payment_method, payment_destination, order_date, cost_status
-      ) values ($1, $2, $3, $4, $5, $6, $7, 'completed', $8, 0, $9, $10, current_date, 'known')
+      ) values ($1, $2, $3, $4, $5, $6, $7, 'completed', $8, 0, $9, $10, coalesce($11::date, current_date), 'known')
       returning id, to_char(order_date, 'YYYY-MM-DD') as order_date`,
       [
         customerName?.trim() || null,
@@ -135,6 +149,7 @@ async function checkout({
         totalAmount,
         payment.paymentMethod,
         payment.paymentDestination,
+        selectedOrderDate,
       ],
     );
     const orderId = orderResult.rows[0].id;

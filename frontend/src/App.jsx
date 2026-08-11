@@ -104,6 +104,7 @@ function App() {
   const [checkingOut, setCheckingOut] = useState(false);
   const [customerName, setCustomerName] = useState('');
   const [customerLink, setCustomerLink] = useState('');
+  const [orderDate, setOrderDate] = useState(localDateInputValue());
   const [customerProfiles, setCustomerProfiles] = useState([]);
   const [customerSuggestionsOpen, setCustomerSuggestionsOpen] = useState(false);
   const [orderDiscount, setOrderDiscount] = useState('');
@@ -353,6 +354,7 @@ function App() {
         body: JSON.stringify({
           customerName,
           customerLink,
+          orderDate,
           discount: orderDiscount === '' ? 0 : Number(orderDiscount),
           fulfillmentMethod,
           appointmentTime,
@@ -381,6 +383,7 @@ function App() {
       setCart({});
       setCustomerName('');
       setCustomerLink('');
+      setOrderDate(localDateInputValue());
       setOrderDiscount('');
       setFulfillmentMethod('offline');
       setAppointmentTime('');
@@ -904,6 +907,10 @@ function App() {
 
           <form onSubmit={submitCheckout} className="mt-6 space-y-4">
             <div className="grid gap-3">
+              <label className="block text-sm">
+                Order date
+                <input type="date" required value={orderDate} onChange={(event) => setOrderDate(event.target.value)} className="mt-1 w-full border border-ink/20 bg-paper px-3 py-2 outline-none focus:border-sepia" />
+              </label>
               <div className="relative text-sm">
                 <label className="block">
                   Customer name <span className="text-ink/40">(optional)</span>

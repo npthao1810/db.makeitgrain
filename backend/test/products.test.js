@@ -247,8 +247,9 @@ test('GET /api/orders returns month-filtered order history', async (t) => {
 test('POST /api/checkout returns the completed order', async (t) => {
   const app = createApp({
     checkout: {
-      checkout: async ({ items }) => {
+      checkout: async ({ items, orderDate }) => {
         assert.deepEqual(items, [{ productId: 16, quantity: 2 }]);
+        assert.equal(orderDate, '2026-08-11');
         return { orderId: 845, totalAmount: 500000, costStatus: 'known' };
       },
     },
@@ -260,7 +261,7 @@ test('POST /api/checkout returns the completed order', async (t) => {
   const response = await fetch(`http://127.0.0.1:${port}/api/checkout`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ items: [{ productId: 16, quantity: 2 }] }),
+    body: JSON.stringify({ items: [{ productId: 16, quantity: 2 }], orderDate: '2026-08-11' }),
   });
 
   assert.equal(response.status, 201);
